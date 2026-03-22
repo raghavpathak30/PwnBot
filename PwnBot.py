@@ -15,6 +15,7 @@ from typing import Optional, Dict, List, Any
 import requests
 from groq import Groq, RateLimitError
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.text import Text
@@ -199,7 +200,7 @@ def trim_conversation_history() -> None:
             "[dim]Trimming old context to stay within token limit...[/dim]"
         )
         # Keep the first message, remove oldest user+assistant pairs
-        while current_tokens > max_tokens and len(conversation_history) > 1:
+        while current_tokens > max_tokens and len(conversation_history) > 2:
             conversation_history.pop(0)
             conversation_history.pop(0)
             current_tokens = estimate_tokens(conversation_history)
@@ -466,18 +467,22 @@ def handle_command(command: str) -> bool:
     return False
 
 
-def call_groq_api(user_message: str) -> Optional[str]:
+def call_groq_api(api_message: str, history_message: str = None) -> Optional[str]:
     """Call Groq API with conversation history and handle errors."""
     global conversation_history, active_model, available_models
 
+    # Use history_message for stored history if provided, otherwise api_message
+    store_message = history_message if history_message else api_message
+
     # Add user message to history
-    conversation_history.append({"role": "user", "content": user_message})
+    conversation_history.append({"role": "user", "content": store_message})
 
     # Trim if necessary
     trim_conversation_history()
 
     # Build system prompt
     system_prompt = build_system_prompt()
+    messages_with_system = [{"role": "system", "content": system_prompt}] + conversation_history[:-1] + [{"role": "user", "content": api_message}]
 
     # Determine which model to use
     model_to_use = active_model
@@ -486,8 +491,7 @@ def call_groq_api(user_message: str) -> Optional[str]:
         try:
             response = groq_client.chat.completions.create(
                 model=model_to_use,
-                messages=conversation_history,
-                system=system_prompt,
+                messages=messages_with_system,
                 max_tokens=4096,
             )
 
@@ -501,16 +505,15 @@ def call_groq_api(user_message: str) -> Optional[str]:
             if model_to_use in available_models:
                 available_models.remove(model_to_use)
 
-            next_model = select_model(available_models)
-
-            if next_model == model_to_use or not available_models:
-                # No more models available
+            if not available_models:
                 console.print(
                     f"[bold red]All models rate limited. Waiting 10 seconds...[/bold red]"
                 )
                 import time
                 time.sleep(10)
                 return None
+
+            next_model = select_model(available_models)
 
             console.print(
                 f"[yellow]Rate limited on {model_to_use}, switching to {next_model}...[/yellow]"
@@ -593,7 +596,7 @@ def main():
             console.print("[dim]Thinking...[/dim]", end="\r")
 
             # Call API
-            response = call_groq_api(user_input)
+            response = call_groq_api(user_input, history_message=original_message)
 
             # Clear thinking line
             console.print(" " * 40, end="\r")
@@ -601,7 +604,7 @@ def main():
             if response:
                 # Display response in panel
                 panel = Panel(
-                    response,
+                    Markdown(response),
                     title="PWNBOT",
                     border_style="green",
                 )
