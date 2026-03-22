@@ -9,6 +9,8 @@ import sys
 import json
 import re
 import time
+import readline
+import atexit
 import subprocess
 import shlex
 from datetime import datetime
@@ -27,7 +29,7 @@ from rich.table import Table
 from duckduckgo_search import DDGS
 
 # Initialize Rich console
-console = Console()
+console = Console(highlight=False)
 
 # ============================================================================
 # CONSTANTS & CONFIGURATION
@@ -67,7 +69,13 @@ Default stack:
 When search results are provided at the top of the user message prefixed with [WEB SEARCH RESULTS], use them to inform your answer. Cite the source name when referencing a result.
 
 ## Session Awareness
-When target context is provided under [CURRENT TARGET], always use the actual values in every command you write. Never use generic placeholders like <target> or <ip> when real values are available."""
+When target context is provided under [CURRENT TARGET], always use the actual values in every command you write. Never use generic placeholders like <target> or <ip> when real values are available.
+
+## Behavior Rules
+- Never generate session termination messages, closing summaries, or end-of-engagement statements unless the user explicitly types /exit or /quit
+- Never say things like "This concludes the session" or "Session Termination"
+- Always stay in active assistant mode - you are mid-engagement until told otherwise
+- Never add legal disclaimers or ethics reminders mid-conversation"""
 
 MODE_REMINDERS = {
     "htb": "[MODE: HTB] Think in phases: recon → foothold → lateral movement → privesc → loot. Box is isolated. Be methodical.",
@@ -107,18 +115,15 @@ session_log_path: Optional[Path] = None
 
 
 def print_banner():
-    """Print the PWNBOT ASCII banner."""
-    banner_text = Text()
-    banner_text.append("    ╔═══════════════════════════════════╗\n", style="bold red")
-    banner_text.append("    ║    🔴 PWNBOT 🔴    ║\n", style="bold yellow")
-    banner_text.append("    ║   Elite Pentesting Companion   ║\n", style="bold red")
-    banner_text.append("    ╚═══════════════════════════════════╝\n", style="bold red")
-    console.print(banner_text)
-
-    console.print(f"Current mode: {current_mode}")
-    console.print(f"Active model: [dim]{active_model}[/dim]")
-    console.print("Type [cyan]/help[/cyan] for commands")
-    console.print(Rule(style="dim"))
+    """Print the PWNBOT banner."""
+    console.print()
+    console.print("[bold red]  PWNBOT[/bold red] [dim]— Elite Pentesting Companion[/dim]")
+    console.rule(style="red")
+    console.print(f"  Mode  : [cyan]{current_mode}[/cyan]")
+    console.print(f"  Model : [dim]{active_model}[/dim]")
+    console.print(f"  Help  : [cyan]/help[/cyan]")
+    console.rule(style="dim")
+    console.print()
 
 
 def fetch_available_models() -> List[str]:
@@ -360,6 +365,7 @@ def handle_command(command: str) -> bool:
 [bold]/model set <model_id>[/bold] — Switch to a specific model
 [bold]/paste[/bold] — Paste multi-line content (type END on new line when done)
 [bold]/run <command>[/bold] — Execute local shell command and send output to PWNBOT
+[bold]/shell <command>[/bold] — Run interactive command (reverse shells, listeners, pwncat)
 [bold]/recon[/bold] — Manually trigger auto recon on current target IP
 """
         console.print(help_text)
@@ -482,6 +488,11 @@ def handle_command(command: str) -> bool:
         handle_run(command)
         return True
 
+    elif cmd == "/shell":
+        command = " ".join(parts[1:]) if len(parts) > 1 else ""
+        handle_shell(command)
+        return True
+
     elif cmd == "/recon":
         if target_state["ip"]:
             run_auto_recon(target_state["ip"])
@@ -524,24 +535,10 @@ def handle_paste() -> None:
     # Create history message (truncated for readability)
     history_message = final_message[:100] + ("..." if len(final_message) > 100 else "")
     
-    # Show thinking
-    console.print("[dim]Thinking...[/dim]", end="\r")
-    
     # Call API
     response = call_groq_api(final_message, history_message=history_message)
     
-    # Clear thinking line
-    console.print(" " * 40, end="\r")
-    
     if response:
-        # Display response in panel
-        panel = Panel(
-            Markdown(response),
-            title="PWNBOT",
-            border_style="green",
-        )
-        console.print(panel)
-        
         # Log the exchange
         log_exchange(history_message, response)
 
@@ -644,24 +641,10 @@ def handle_run(command: str) -> None:
         # Create history message (truncated)
         history_message = f"[/run output: {command[:50]}{'...' if len(command) > 50 else ''}]"
         
-        # Show thinking
-        console.print("[dim]Thinking...[/dim]", end="\r")
-        
         # Call API
         response = call_groq_api(final_message, history_message=history_message)
         
-        # Clear thinking line
-        console.print(" " * 40, end="\r")
-        
         if response:
-            # Display response in panel
-            panel = Panel(
-                Markdown(response),
-                title="PWNBOT",
-                border_style="green",
-            )
-            console.print(panel)
-            
             # Log the exchange
             log_exchange(history_message, response)
     
@@ -669,14 +652,31 @@ def handle_run(command: str) -> None:
         console.print(f"[bold red]Error: {e}[/bold red]")
 
 
+def handle_shell(command: str) -> None:
+    if not command.strip():
+        console.print("[dim yellow]Usage: /shell <command>[/dim yellow]")
+        console.print("[dim yellow]Examples:[/dim yellow]")
+        console.print("[dim yellow]  /shell nc -lvnp 4444[/dim yellow]")
+        console.print("[dim yellow]  /shell pwncat-cs -lp 4444[/dim yellow]")
+        console.print("[dim yellow]  /shell python3 -c 'import pty; pty.spawn(\"/bin/bash\")'[/dim yellow]")
+        return
+    console.print(f"[dim yellow]Launching interactive shell: {command}[/dim yellow]")
+    console.print("[dim]Press Ctrl+C to return to PWNBOT[/dim]")
+    try:
+        os.system(command)
+    except KeyboardInterrupt:
+        pass
+    console.print("[dim yellow]Returned to PWNBOT[/dim yellow]")
+
+
 def run_auto_recon(ip: str) -> None:
     """Run automated nmap recon on target IP and send results to PWNBOT."""
     console.print(f"[dim yellow]Starting auto recon on {ip}...[/dim yellow]")
     
     nmap_commands = [
-        f"nmap -sV -sC --open -T4 {ip}",
-        f"nmap -p- --min-rate 5000 -T4 {ip}",
-        f"nmap -sU --top-ports 20 {ip}",
+        f"sudo nmap -sV -sC --open -T4 {ip}",
+        f"sudo nmap -p- --min-rate 5000 -T4 {ip}",
+        f"sudo nmap -sU --top-ports 20 {ip}",
     ]
     
     results = []
@@ -717,17 +717,9 @@ def run_auto_recon(ip: str) -> None:
     
     # Send to API
     history_message = f"[auto recon: {ip}]"
-    console.print("[dim]Processing results...[/dim]", end="\r")
     response = call_groq_api(combined_output, history_message=history_message)
-    console.print(" " * 40, end="\r")
     
     if response:
-        panel = Panel(
-            Markdown(response),
-            title="PWNBOT",
-            border_style="green",
-        )
-        console.print(panel)
         log_exchange(history_message, response)
     
     console.print("[green]Auto recon complete.[/green]")
@@ -957,9 +949,7 @@ def call_groq_api(api_message: str, history_message: str = None) -> Optional[str
                 delta = chunk.choices[0].delta.content
                 if delta:
                     assistant_message += delta
-                    console.print(delta, end="", highlight=False)
-            
-            # Print blank line after streaming
+                    console.print(delta, end="")
             console.print()
             
             conversation_history.append({"role": "assistant", "content": assistant_message})
@@ -1028,6 +1018,18 @@ def main():
     initialize_logging()
     load_target_state()
 
+    history_file = os.path.expanduser("~/.pwnbot_history")
+    try:
+        readline.read_history_file(history_file)
+    except FileNotFoundError:
+        pass
+    atexit.register(readline.write_history_file, history_file)
+    readline.set_history_length(500)
+    try:
+        readline.set_completer(None)
+    except Exception:
+        pass
+
     # Print banner
     print_banner()
 
@@ -1035,7 +1037,7 @@ def main():
     try:
         while True:
             try:
-                user_input = Prompt.ask("[bold cyan]You[/bold cyan]").strip()
+                user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]").strip()
             except EOFError:
                 # Handle end of input
                 save_target_state()
@@ -1060,24 +1062,10 @@ def main():
                 if search_results:
                     user_input = search_results + original_message
 
-            # Show thinking
-            console.print("[dim]Thinking...[/dim]", end="\r")
-
             # Call API
             response = call_groq_api(user_input, history_message=original_message)
 
-            # Clear thinking line (streaming already added newline)
-            console.print(" " * 40, end="\r")
-
             if response:
-                # Display response in panel
-                panel = Panel(
-                    Markdown(response),
-                    title="PWNBOT",
-                    border_style="green",
-                )
-                console.print(panel)
-
                 # Log the exchange (with original message, not augmented)
                 log_exchange(original_message, response)
 
