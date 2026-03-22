@@ -9,6 +9,8 @@ import sys
 import json
 import re
 import time
+import subprocess
+import shlex
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List, Any
@@ -356,6 +358,9 @@ def handle_command(command: str) -> bool:
 [bold]/mode htb|bugbounty|recon[/bold] — Switch engagement mode
 [bold]/model[/bold] — Show active model and availability
 [bold]/model set <model_id>[/bold] — Switch to a specific model
+[bold]/paste[/bold] — Paste multi-line content (type END on new line when done)
+[bold]/run <command>[/bold] — Execute local shell command and send output to PWNBOT
+[bold]/recon[/bold] — Manually trigger auto recon on current target IP
 """
         console.print(help_text)
         return True
@@ -399,6 +404,13 @@ def handle_command(command: str) -> bool:
             target_state["ip"] = value
             console.print(f"[green]IP set to: {value}[/green]")
             save_target_state()
+            # Ask for auto recon
+            recon_choice = Prompt.ask(
+                f"Run auto recon on {value}? (y/n)",
+                default="n"
+            )
+            if recon_choice.strip().lower() in ["y", "yes"]:
+                run_auto_recon(value)
         elif subcommand == "domain":
             target_state["domain"] = value
             console.print(f"[green]Domain set to: {value}[/green]")
@@ -461,7 +473,454 @@ def handle_command(command: str) -> bool:
                     console.print(f"  - {model}")
         return True
 
+    elif cmd == "/paste":
+        handle_paste()
+        return True
+
+    elif cmd == "/run":
+        command = " ".join(parts[1:]) if len(parts) > 1 else ""
+        handle_run(command)
+        return True
+
+    elif cmd == "/recon":
+        if target_state["ip"]:
+            run_auto_recon(target_state["ip"])
+        else:
+            console.print("[yellow]No target IP set. Use /set ip <value> first.[/yellow]")
+        return True
+
     return False
+
+
+def handle_paste() -> None:
+    """Handle /paste command for multi-line input."""
+    console.print("[dim cyan]Paste your content below. Type END on a new line when done:[/dim cyan]")
+    
+    lines: List[str] = []
+    try:
+        while True:
+            line = input()
+            if line.strip() == "END":
+                break
+            lines.append(line)
+    except KeyboardInterrupt:
+        console.print("[yellow]Paste cancelled.[/yellow]")
+        return
+    
+    pasted_content = "\n".join(lines)
+    
+    if not pasted_content.strip():
+        console.print("[yellow]Warning: No content provided.[/yellow]")
+        return
+    
+    # Ask for optional question
+    question = Prompt.ask("Add a question about this content (or press Enter to skip)", default="")
+    
+    if question.strip():
+        final_message = pasted_content + "\n\n" + question.strip()
+    else:
+        final_message = pasted_content
+    
+    # Create history message (truncated for readability)
+    history_message = final_message[:100] + ("..." if len(final_message) > 100 else "")
+    
+    # Show thinking
+    console.print("[dim]Thinking...[/dim]", end="\r")
+    
+    # Call API
+    response = call_groq_api(final_message, history_message=history_message)
+    
+    # Clear thinking line
+    console.print(" " * 40, end="\r")
+    
+    if response:
+        # Display response in panel
+        panel = Panel(
+            Markdown(response),
+            title="PWNBOT",
+            border_style="green",
+        )
+        console.print(panel)
+        
+        # Log the exchange
+        log_exchange(history_message, response)
+
+
+def handle_run(command: str) -> None:
+    """Handle /run command for local shell execution."""
+    if not command.strip():
+        console.print("[dim yellow]Usage: /run <command>[/dim yellow]")
+        console.print("[dim yellow]Example: /run nmap -sV -sC 10.10.11.20[/dim yellow]")
+        return
+    
+    # Warn if pipe, redirect, or semicolon detected
+    if "|" in command or ">" in command or ";" in command:
+        console.print("[yellow]Note: pipes, redirects and semicolons are not supported with /run — run complex commands in a separate terminal[/yellow]")
+        return
+    
+    console.print(f"[dim yellow]Running: {command}[/dim yellow]")
+    
+    # Parse command safely
+    try:
+        args = shlex.split(command)
+    except ValueError as e:
+        console.print(f"[bold red]Command parse error: {e}[/bold red]")
+        return
+    
+    try:
+        with subprocess.Popen(
+            args,
+            shell=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        ) as proc:
+            try:
+                stdout, stderr = proc.communicate(timeout=120)
+                stdout = stdout.strip()
+                stderr = stderr.strip()
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                console.print("[bold red]Command timed out after 120 seconds. Process killed.[/bold red]")
+                return
+        
+        if not stdout and not stderr:
+            console.print("[yellow]Command produced no output[/yellow]")
+            return
+        
+        # Build output block with truncation
+        output_block = f"[COMMAND OUTPUT]\n$ {command}\n"
+        # Truncate stdout to 3000 chars
+        stdout_display = stdout[:3000] + ("...[truncated]" if len(stdout) > 3000 else "")
+        if stdout_display:
+            output_block += stdout_display
+        if stderr:
+            if stdout_display:
+                output_block += "\n"
+            # Truncate stderr to 1000 chars
+            stderr_display = stderr[:1000] + ("...[truncated]" if len(stderr) > 1000 else "")
+            output_block += f"[STDERR]\n{stderr_display}"
+        
+        # Display output in panel
+        panel = Panel(
+            output_block,
+            title="Output",
+            border_style="cyan",
+            style="dim"
+        )
+        console.print(panel)
+        
+        # Parse tool output for insights
+        parsed_output = parse_tool_output(command, stdout)
+        if parsed_output:
+            insights_panel = Panel(
+                parsed_output,
+                title="Parsed Insights",
+                border_style="yellow",
+                style="dim"
+            )
+            console.print(insights_panel)
+            
+            # Suggest exploits if nmap
+            if "nmap" in command.lower():
+                suggest_exploits(parsed_output, stdout)
+        
+        # Ask if user wants to send to PWNBOT
+        context = Prompt.ask(
+            "Add context and press Enter to send, or type SKIP to cancel",
+            default=""
+        )
+        
+        if context.strip().upper() == "SKIP":
+            console.print("[yellow]Cancelled — output not sent.[/yellow]")
+            return
+        
+        if context.strip():
+            final_message = output_block + "\n\n" + context.strip()
+        else:
+            final_message = output_block
+        
+        # Create history message (truncated)
+        history_message = f"[/run output: {command[:50]}{'...' if len(command) > 50 else ''}]"
+        
+        # Show thinking
+        console.print("[dim]Thinking...[/dim]", end="\r")
+        
+        # Call API
+        response = call_groq_api(final_message, history_message=history_message)
+        
+        # Clear thinking line
+        console.print(" " * 40, end="\r")
+        
+        if response:
+            # Display response in panel
+            panel = Panel(
+                Markdown(response),
+                title="PWNBOT",
+                border_style="green",
+            )
+            console.print(panel)
+            
+            # Log the exchange
+            log_exchange(history_message, response)
+    
+    except Exception as e:
+        console.print(f"[bold red]Error: {e}[/bold red]")
+
+
+def run_auto_recon(ip: str) -> None:
+    """Run automated nmap recon on target IP and send results to PWNBOT."""
+    console.print(f"[dim yellow]Starting auto recon on {ip}...[/dim yellow]")
+    
+    nmap_commands = [
+        f"nmap -sV -sC --open -T4 {ip}",
+        f"nmap -p- --min-rate 5000 -T4 {ip}",
+        f"nmap -sU --top-ports 20 {ip}",
+    ]
+    
+    results = []
+    
+    for nmap_cmd in nmap_commands:
+        try:
+            with subprocess.Popen(
+                shlex.split(nmap_cmd),
+                shell=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            ) as proc:
+                try:
+                    stdout, stderr = proc.communicate(timeout=180)
+                    results.append((nmap_cmd, stdout.strip(), stderr.strip()))
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate()
+                    results.append((nmap_cmd, "", "[TIMEOUT after 180 seconds]"))
+        except Exception as e:
+            results.append((nmap_cmd, "", f"[ERROR: {e}]"))
+    
+    # Build combined message
+    combined_output = f"[AUTO RECON: {ip}]\n"
+    for cmd, out, err in results:
+        combined_output += f"\n=== {cmd} ===\n"
+        # Truncate each output to 3000 chars to avoid token overflow
+        output_block = out[:3000] + ("...[truncated]" if len(out) > 3000 else "")
+        if output_block:
+            combined_output += output_block
+        if err:
+            if output_block:
+                combined_output += "\n"
+            # Truncate error too
+            err_block = err[:1000] + ("...[truncated]" if len(err) > 1000 else "")
+            combined_output += f"[STDERR]\n{err_block}"
+    
+    # Send to API
+    history_message = f"[auto recon: {ip}]"
+    console.print("[dim]Processing results...[/dim]", end="\r")
+    response = call_groq_api(combined_output, history_message=history_message)
+    console.print(" " * 40, end="\r")
+    
+    if response:
+        panel = Panel(
+            Markdown(response),
+            title="PWNBOT",
+            border_style="green",
+        )
+        console.print(panel)
+        log_exchange(history_message, response)
+    
+    console.print("[green]Auto recon complete.[/green]")
+
+
+def parse_tool_output(command: str, output: str) -> Optional[str]:
+    """Parse tool output and extract structured insights."""
+    if not output:
+        return None
+    
+    if "nmap" in command.lower():
+        return parse_nmap_output(output)
+    elif "gobuster" in command.lower():
+        return parse_gobuster_output(output)
+    elif "ffuf" in command.lower():
+        return parse_ffuf_output(output)
+    
+    return None
+
+
+def parse_nmap_output(output: str) -> Optional[str]:
+    """Extract structured insights from nmap output."""
+    lines = output.split("\n")
+    
+    open_ports = []
+    services = []
+    os_guess = None
+    
+    for line in lines:
+        # Extract open ports
+        if re.search(r"\d+/(tcp|udp)\s+open", line):
+            match = re.search(r"(\d+/(tcp|udp))\s+open\s+(.+)", line)
+            if match:
+                port_proto = match.group(1)
+                service = match.group(3).split()[0] if match.group(3) else "?"
+                open_ports.append(port_proto)
+                services.append(f"{port_proto} {service}")
+        
+        # Extract OS info
+        if "OS:" in line or "Running:" in line or "OS CPE:" in line:
+            if os_guess is None:
+                os_guess = line.strip()
+    
+    if not open_ports and not os_guess:
+        return None
+    
+    result = "[NMAP SUMMARY]\n"
+    if open_ports:
+        result += f"Open ports: {', '.join(open_ports)}\n"
+    if services:
+        result += f"Services: {', '.join(services)}\n"
+    if os_guess:
+        result += f"OS info: {os_guess}"
+    
+    return result.strip()
+
+
+def parse_gobuster_output(output: str) -> Optional[str]:
+    """Extract structured insights from gobuster output."""
+    lines = output.split("\n")
+    
+    found_200 = []
+    found_301_302 = []
+    found_403 = []
+    
+    for line in lines:
+        if "Status:" in line:
+            # Extract path and status
+            path_match = re.search(r"(/[^\s]*)", line)
+            status_match = re.search(r"Status: (\d+)", line)
+            
+            if path_match and status_match:
+                path = path_match.group(1)
+                status = status_match.group(1)
+                
+                if status == "200":
+                    found_200.append(path)
+                elif status in ["301", "302"]:
+                    found_301_302.append(path)
+                elif status == "403":
+                    found_403.append(path)
+    
+    if not found_200 and not found_301_302 and not found_403:
+        return None
+    
+    result = "[GOBUSTER SUMMARY]\n"
+    if found_200:
+        result += f"Found (200): {', '.join(found_200)}\n"
+    if found_301_302:
+        result += f"Redirects (301/302): {', '.join(found_301_302)}\n"
+    if found_403:
+        result += f"Forbidden (403): {', '.join(found_403)}"
+    
+    return result.strip()
+
+
+def parse_ffuf_output(output: str) -> Optional[str]:
+    """Extract structured insights from ffuf output."""
+    lines = output.split("\n")
+    
+    status_groups = {}
+    
+    for line in lines:
+        if "[Status:" in line:
+            # Extract status code and URL
+            status_match = re.search(r"\[Status: (\d+)", line)
+            url_match = re.search(r"(https?://[^\s]+)", line)
+            
+            if status_match:
+                status = status_match.group(1)
+                url = url_match.group(1) if url_match else "?"
+                
+                if status not in status_groups:
+                    status_groups[status] = []
+                status_groups[status].append(url)
+    
+    if not status_groups:
+        return None
+    
+    result = "[FFUF SUMMARY]\n"
+    for status in sorted(status_groups.keys()):
+        urls = status_groups[status]
+        result += f"{status}: {', '.join(urls)}\n"
+    
+    return result.strip()
+
+
+def suggest_exploits(parsed_output: str, original_output: str) -> None:
+    """Suggest exploits using searchsploit based on service versions."""
+    # Check if searchsploit is available
+    try:
+        result = subprocess.run(
+            ["which", "searchsploit"],
+            capture_output=True,
+            timeout=5
+        )
+        if result.returncode != 0:
+            console.print("[dim]searchsploit not found — skipping exploit suggestions[/dim]")
+            return
+    except Exception:
+        console.print("[dim]searchsploit not found — skipping exploit suggestions[/dim]")
+        return
+    
+    # Extract service+version patterns
+    patterns = [
+        r"(Apache|nginx|IIS|Tomcat|JBoss|Jetty)\s+([\d.]+)",
+        r"(OpenSSH|vsftpd|Exim|Postfix|Sendmail)\s+([\d.]+)",
+        r"(MySQL|MariaDB|PostgreSQL|MongoDB)\s+([\d.]+)",
+        r"(PHP|Python|Node\.js|Ruby)\s+([\d.]+)",
+    ]
+    
+    services_found = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, original_output, re.IGNORECASE):
+            service = match.group(1)
+            version = match.group(2)
+            services_found.add((service, version))
+            if len(services_found) >= 5:
+                break
+        if len(services_found) >= 5:
+            break
+    
+    if not services_found:
+        return
+    
+    all_results = []
+    
+    for service, version in list(services_found)[:5]:
+        try:
+            result = subprocess.run(
+                shlex.split(f"searchsploit {service} {version} --no-colour"),
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.stdout.strip():
+                all_results.append(f"\n{service} {version}:\n{result.stdout}")
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
+            pass
+    
+    if all_results:
+        exploit_text = "[EXPLOIT SUGGESTIONS]\n" + "".join(all_results)
+        exploit_panel = Panel(
+            exploit_text,
+            title="Exploit Suggestions (searchsploit)",
+            border_style="red",
+            style="dim"
+        )
+        console.print(exploit_panel)
+    else:
+        console.print("[dim]No searchsploit matches found[/dim]")
 
 
 def call_groq_api(api_message: str, history_message: str = None) -> Optional[str]:
@@ -490,9 +949,19 @@ def call_groq_api(api_message: str, history_message: str = None) -> Optional[str
                 model=model_to_use,
                 messages=messages_with_system,
                 max_tokens=4096,
+                stream=True,
             )
 
-            assistant_message = response.choices[0].message.content
+            assistant_message = ""
+            for chunk in response:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    assistant_message += delta
+                    console.print(delta, end="", highlight=False)
+            
+            # Print blank line after streaming
+            console.print()
+            
             conversation_history.append({"role": "assistant", "content": assistant_message})
 
             return assistant_message
@@ -597,7 +1066,7 @@ def main():
             # Call API
             response = call_groq_api(user_input, history_message=original_message)
 
-            # Clear thinking line
+            # Clear thinking line (streaming already added newline)
             console.print(" " * 40, end="\r")
 
             if response:
