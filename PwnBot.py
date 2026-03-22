@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List, Any
@@ -280,7 +281,7 @@ def should_trigger_search(message: str) -> bool:
     # Check for trigger phrases
     if any(
         phrase in message_lower
-        for phrase in ["search for", "look up", "find me"]
+        for phrase in ["search for", "look up"]
     ):
         return True
 
@@ -288,12 +289,8 @@ def should_trigger_search(message: str) -> bool:
     if re.search(r"cve-\d{4}-\d+", message_lower, re.IGNORECASE):
         return True
 
-    # Check for version pattern (v1.2.3 or 1.2.3)
-    if re.search(r"v?\d+\.\d+\.\d+", message):
-        return True
-
-    # Check for "what is" pattern
-    if message_lower.startswith("what is "):
+    # Check for version pattern (v1.2.3 only, not bare IPs)
+    if re.search(r"v\d+\.\d+\.\d+", message):
         return True
 
     return False
@@ -304,7 +301,7 @@ def extract_search_query(message: str) -> str:
     message_lower = message.lower()
 
     # Try to extract from trigger phrases
-    for phrase in ["search for", "look up", "find me"]:
+    for phrase in ["search for", "look up"]:
         if phrase in message_lower:
             parts = message.split(phrase, 1)
             if len(parts) > 1:
@@ -317,7 +314,7 @@ def extract_search_query(message: str) -> str:
         return cve_match.group(0)
 
     # Try to extract version
-    version_match = re.search(r"v?\d+\.\d+\.\d+", message)
+    version_match = re.search(r"v\d+\.\d+\.\d+", message)
     if version_match:
         words = message.split()
         for i, word in enumerate(words):
@@ -325,11 +322,6 @@ def extract_search_query(message: str) -> str:
                 start = max(0, i - 2)
                 end = min(len(words), i + 3)
                 return " ".join(words[start:end])
-
-    # Extract from "what is" pattern
-    if message_lower.startswith("what is "):
-        query = message[8:].strip()
-        return " ".join(query.split()[:6])
 
     return message[:100]
 
@@ -396,6 +388,9 @@ def handle_command(command: str) -> bool:
         console.print(table)
         return True
 
+    elif cmd == "/set" and len(parts) < 3:
+        console.print("[bold red]Usage: /set <ip|domain|port|creds> <value>[/bold red]")
+        return True
     elif cmd == "/set" and len(parts) >= 3:
         subcommand = parts[1].lower()
         value = parts[2]
@@ -450,6 +445,8 @@ def handle_command(command: str) -> bool:
             for i, model in enumerate(MODEL_PRIORITY, 1):
                 marker = "[green]✓[/green]" if model in available_models else "[red]✗[/red]"
                 console.print(f"  {marker} {i}. {model}")
+        elif len(parts) == 2 and parts[1].lower() == "set":
+            console.print("[bold red]Usage: /model set <model_id>[/bold red]")
         elif len(parts) >= 3 and parts[1].lower() == "set":
             model_id = parts[2]
             if model_id in available_models:
@@ -509,7 +506,9 @@ def call_groq_api(api_message: str, history_message: str = None) -> Optional[str
                 console.print(
                     f"[bold red]All models rate limited. Waiting 10 seconds...[/bold red]"
                 )
-                import time
+                # Clean up orphaned user message
+                if conversation_history and conversation_history[-1]["role"] == "user":
+                    conversation_history.pop()
                 time.sleep(10)
                 return None
 
