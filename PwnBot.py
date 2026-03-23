@@ -85,7 +85,6 @@ MODE_REMINDERS = {
 
 MODEL_PRIORITY = [
     "llama-3.3-70b-versatile",
-    "openai/gpt-oss-120b",
     "llama-3.1-70b-versatile",
     "llama3-70b-8192",
     "llama-3.1-8b-instant",
@@ -117,12 +116,25 @@ session_log_path: Optional[Path] = None
 def print_banner():
     """Print the PWNBOT banner."""
     console.print()
-    console.print("[bold red]  PWNBOT[/bold red] [dim]— Elite Pentesting Companion[/dim]")
-    console.rule(style="red")
-    console.print(f"  Mode  : [cyan]{current_mode}[/cyan]")
-    console.print(f"  Model : [dim]{active_model}[/dim]")
-    console.print(f"  Help  : [cyan]/help[/cyan]")
-    console.rule(style="dim")
+    mode_color = {
+        "htb": "red",
+        "bugbounty": "yellow",
+        "recon": "blue",
+    }.get(current_mode, "cyan")
+    banner_text = (
+        "[bold red]PWNBOT[/bold red]\n"
+        f"Mode  : [{mode_color}]{current_mode}[/{mode_color}]\n"
+        f"Model : [dim]{active_model}[/dim]\n"
+        "Tip   : [cyan]Type /help for commands[/cyan]"
+    )
+    console.print(
+        Panel(
+            banner_text,
+            title="[bold]Elite Pentesting Companion[/bold]",
+            border_style="red",
+            expand=False,
+        )
+    )
     console.print()
 
 
@@ -209,8 +221,13 @@ def trim_conversation_history() -> None:
         )
         # Keep the first message, remove oldest user+assistant pairs
         while current_tokens > max_tokens and len(conversation_history) > 2:
-            conversation_history.pop(0)
-            conversation_history.pop(0)
+            if (conversation_history[0]["role"] == "user" and 
+                    len(conversation_history) > 1 and
+                    conversation_history[1]["role"] == "assistant"):
+                conversation_history.pop(0)
+                conversation_history.pop(0)
+            else:
+                conversation_history.pop(0)
             current_tokens = estimate_tokens(conversation_history)
 
 
@@ -346,29 +363,41 @@ def handle_command(command: str) -> bool:
         return True
 
     elif cmd == "/help":
-        help_text = """
-[bold cyan]Available Commands:[/bold cyan]
+        table = Table(title="Help", show_header=True, header_style="bold")
+        table.add_column("Command", style="cyan")
+        table.add_column("Description", style="white")
 
-[bold]/clear[/bold] — Clear conversation history (preserve target & mode)
-[bold]/help[/bold] — Show this help message
-[bold]/exit, /quit[/bold] — Save target and exit
-[bold]/history[/bold] — Show number of user turns
-[bold]/target[/bold] — Display current target state
-[bold]/set ip <value>[/bold] — Set target IP
-[bold]/set domain <value>[/bold] — Set target domain
-[bold]/set port <value>[/bold] — Add a port to target
-[bold]/set creds <value>[/bold] — Add credentials
-[bold]/note <text>[/bold] — Add a timestamped note
-[bold]/save[/bold] — Save target state to session_target.json
-[bold]/mode htb|bugbounty|recon[/bold] — Switch engagement mode
-[bold]/model[/bold] — Show active model and availability
-[bold]/model set <model_id>[/bold] — Switch to a specific model
-[bold]/paste[/bold] — Paste multi-line content (type END on new line when done)
-[bold]/run <command>[/bold] — Execute local shell command and send output to PWNBOT
-[bold]/shell <command>[/bold] — Run interactive command (reverse shells, listeners, pwncat)
-[bold]/recon[/bold] — Manually trigger auto recon on current target IP
-"""
-        console.print(help_text)
+        table.add_row("[bold]Session[/bold]", "")
+        table.add_row("/clear", "Clear conversation history (preserve target & mode)")
+        table.add_row("/help", "Show this help message")
+        table.add_row("/history", "Show number of user turns")
+        table.add_row("/report", "Generate markdown report from current session")
+        table.add_row("/exit, /quit", "Save target and exit")
+
+        table.add_section()
+        table.add_row("[bold]Target[/bold]", "")
+        table.add_row("/target", "Display current target state")
+        table.add_row("/set ip <value>", "Set target IP")
+        table.add_row("/set domain <value>", "Set target domain")
+        table.add_row("/set port <value>", "Add a port to target")
+        table.add_row("/set creds <value>", "Add credentials")
+        table.add_row("/note <text>", "Add a timestamped note")
+        table.add_row("/save", "Save target state to session_target.json")
+
+        table.add_section()
+        table.add_row("[bold]Execution[/bold]", "")
+        table.add_row("/paste", "Paste multi-line content (type END on new line when done)")
+        table.add_row("/run <command>", "Execute local shell command and send output to PWNBOT")
+        table.add_row("/shell <command>", "Run interactive command (reverse shells, listeners, pwncat)")
+        table.add_row("/recon", "Manually trigger auto recon on current target IP")
+
+        table.add_section()
+        table.add_row("[bold]Settings[/bold]", "")
+        table.add_row("/mode htb|bugbounty|recon", "Switch engagement mode")
+        table.add_row("/model", "Show active model and availability")
+        table.add_row("/model set <model_id>", "Switch to a specific model")
+
+        console.print(table)
         return True
 
     elif cmd == "/exit" or cmd == "/quit":
@@ -386,15 +415,20 @@ def handle_command(command: str) -> bool:
         table.add_column("Field", style="cyan")
         table.add_column("Value")
 
-        table.add_row("IP", str(target_state["ip"] or "not set"))
-        table.add_row("Domain", str(target_state["domain"] or "not set"))
-        table.add_row(
-            "Open Ports", ",".join(map(str, target_state["ports"])) or "none"
-        )
-        table.add_row("Credentials", ",".join(target_state["creds"]) or "none")
-        table.add_row(
-            "Notes", "\n".join(target_state["notes"]) or "none"
-        )
+        ip_value = str(target_state["ip"] or "not set")
+        domain_value = str(target_state["domain"] or "not set")
+        ports_value = ",".join(map(str, target_state["ports"])) or "none"
+        creds_value = ",".join(target_state["creds"]) or "none"
+        notes_value = "\n".join(target_state["notes"]) or "none"
+
+        def style_target_value(value: str) -> str:
+            return f"[dim red]{value}[/dim red]" if value in {"not set", "none"} else f"[green]{value}[/green]"
+
+        table.add_row("IP", style_target_value(ip_value))
+        table.add_row("Domain", style_target_value(domain_value))
+        table.add_row("Open Ports", style_target_value(ports_value))
+        table.add_row("Credentials", style_target_value(creds_value))
+        table.add_row("Notes", style_target_value(notes_value))
 
         console.print(table)
         return True
@@ -498,6 +532,66 @@ def handle_command(command: str) -> bool:
             run_auto_recon(target_state["ip"])
         else:
             console.print("[yellow]No target IP set. Use /set ip <value> first.[/yellow]")
+        return True
+
+    elif cmd == "/report":
+        # Create reports directory if it doesn't exist
+        reports_dir = Path("reports")
+        reports_dir.mkdir(exist_ok=True)
+
+        # Get current timestamp for filename
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        ip_str = target_state["ip"] or "unknown"
+        report_filename = f"report_{ip_str}_{timestamp}.md"
+        report_path = reports_dir / report_filename
+
+        # Build report content
+        report_lines = [
+            "# Pentest Report",
+            f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"**Target IP:** {target_state['ip'] or 'not set'}",
+            f"**Domain:** {target_state['domain'] or 'not set'}",
+            "",
+            "## Open Ports",
+        ]
+        if target_state["ports"]:
+            for port in target_state["ports"]:
+                report_lines.append(f"- {port}")
+        else:
+            report_lines.append("- None logged")
+
+        report_lines.extend([
+            "",
+            "## Credentials Found",
+        ])
+        if target_state["creds"]:
+            for cred in target_state["creds"]:
+                report_lines.append(f"- {cred}")
+        else:
+            report_lines.append("- None logged")
+
+        report_lines.extend([
+            "",
+            "## Notes",
+        ])
+        if target_state["notes"]:
+            for note in target_state["notes"]:
+                report_lines.append(f"- {note}")
+        else:
+            report_lines.append("- None")
+
+        report_lines.extend([
+            "",
+            "## Session Log",
+            f"Full session log: {session_log_path if session_log_path else 'No session log available'}",
+        ])
+
+        # Write report to file
+        report_content = "\n".join(report_lines)
+        with open(report_path, "w") as f:
+            f.write(report_content)
+
+        console.print(f"[green]Report saved to: {report_path}[/green]")
         return True
 
     return False
@@ -672,12 +766,14 @@ def handle_shell(command: str) -> None:
 def run_auto_recon(ip: str) -> None:
     """Run automated nmap recon on target IP and send results to PWNBOT."""
     console.print(f"[dim yellow]Starting auto recon on {ip}...[/dim yellow]")
+    is_root = os.geteuid() == 0
     
     nmap_commands = [
-        f"sudo nmap -sV -sC --open -T4 {ip}",
-        f"sudo nmap -p- --min-rate 5000 -T4 {ip}",
-        f"sudo nmap -sU --top-ports 20 {ip}",
+        f"nmap -sV -sC --open -T4 {ip}",
+        f"nmap -p- --min-rate 5000 -T4 {ip}",
     ]
+    if is_root:
+        nmap_commands.append(f"nmap -sU --top-ports 20 {ip}")
     
     results = []
     
@@ -865,10 +961,10 @@ def suggest_exploits(parsed_output: str, original_output: str) -> None:
     
     # Extract service+version patterns
     patterns = [
-        r"(Apache|nginx|IIS|Tomcat|JBoss|Jetty)\s+([\d.]+)",
-        r"(OpenSSH|vsftpd|Exim|Postfix|Sendmail)\s+([\d.]+)",
-        r"(MySQL|MariaDB|PostgreSQL|MongoDB)\s+([\d.]+)",
-        r"(PHP|Python|Node\.js|Ruby)\s+([\d.]+)",
+        r"(Apache|nginx|IIS|Tomcat|JBoss|Jetty)[^\d]*([\d]+\.[\d.]+)",
+        r"(OpenSSH|vsftpd|Exim|Postfix|Sendmail)[^\d]*([\d]+\.[\d.]+)",
+        r"(MySQL|MariaDB|PostgreSQL|MongoDB)[^\d]*([\d]+\.[\d.]+)",
+        r"(PHP|Python|Node\.js|Ruby)[^\d]*([\d]+\.[\d.]+)",
     ]
     
     services_found = set()
@@ -945,12 +1041,14 @@ def call_groq_api(api_message: str, history_message: str = None) -> Optional[str
             )
 
             assistant_message = ""
+            console.print(Rule("PWNBOT", style="green"))
             for chunk in response:
                 delta = chunk.choices[0].delta.content
                 if delta:
                     assistant_message += delta
                     console.print(delta, end="")
             console.print()
+            console.print(Rule(style="dim"))
             
             conversation_history.append({"role": "assistant", "content": assistant_message})
 
