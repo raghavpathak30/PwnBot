@@ -1,9 +1,6 @@
-__pycache__/
-*.pyc
-*.pyo
 session_target.json
 logs/
+__pycache__/
+*.pyc
 .env
-*.egg-info/
-dist/
-build/
+*.key
