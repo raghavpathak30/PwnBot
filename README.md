@@ -4,20 +4,32 @@ PwnBot is a Python CLI chatbot focused on authorized penetration testing workflo
 
 ## What It Does
 
-- Runs an interactive security-focused chat session in your terminal.
-- Uses Groq-hosted LLMs with model fallback behavior under rate limits.
-- **Streams responses in real-time** — tokens are printed directly as deltas arrive (simple terminal streaming, no duplicate post-stream panel render).
-- Supports engagement modes: `htb`, `bugbounty`, and `recon`.
-- Tracks target context (IP, domain, ports, credentials, notes) across session runs.
-- Saves session target state and writes conversation logs.
-- Optionally augments prompts with top web search results when trigger phrases/patterns are detected.
-- Supports multi-line input pasting (`/paste`) and local command execution with automatic context feeding (`/run`).
-- Supports interactive shell/listener workflows with `/shell <command>` for reverse shells and TTY upgrades.
-- **Auto recon feature** — Automatically runs nmap scans when IP is set, with output parsing and exploit suggestions.
-- **Tool output parsing** — Extracts structured insights from nmap, gobuster, and ffuf output.
-- **Exploit suggestions** — Queries searchsploit for known vulnerabilities in detected services.
-- **Secure command execution** — Uses `shlex.split()` with `shell=False` to prevent command injection attacks.
-- Persistent command history with arrow-key navigation via readline (`~/.pwnbot_history`).
+- Interactive terminal chat with streaming AI responses
+- Auto model failover across 4 Groq LLMs on rate limits
+- `/run <command>` — execute nmap/gobuster/ffuf locally, auto-parse output, get exploit suggestions via searchsploit
+- `/shell <command>` — interactive reverse shells, listeners, TTY upgrades
+- `/recon` — automated 3-scan nmap recon when target IP is set
+- `/paste` — multi-line input for tool output or code
+- `/report` — generate markdown pentest report from session data
+- `/target` — track IP, domain, ports, creds, notes per session
+- Session logs saved to `logs/` as markdown
+- Web search auto-triggered on CVE patterns and version strings
+- 3 engagement modes: `htb`, `bugbounty`, `recon`
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `/run <cmd>` | Run local command, parse output, send to AI |
+| `/shell <cmd>` | Launch interactive shell or listener |
+| `/recon` | Automated nmap reconnaissance |
+| `/paste` | Multi-line input (nmap output, code, etc.) |
+| `/report` | Generate markdown pentest report |
+| `/target` | View/manage target state |
+| `/set ip <value>` | Set target IP (prompts for auto recon) |
+| `/mode htb\|bugbounty\|recon` | Switch engagement mode |
+| `/model` | Show active model and availability |
+| `/help` | Show detailed help |
 
 ## Requirements
 
