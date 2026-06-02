@@ -100,7 +100,7 @@ def handle_run(
         console.print(panel)
         
         # Parse tool output for insights
-        parsed_output = parse_tool_output(command, stdout)
+        parsed_output = parse_tool_output(command, stdout, target_state)
         if parsed_output:
             insights_panel = Panel(
                 parsed_output,
@@ -219,6 +219,19 @@ def run_auto_recon(
     # Build combined message
     combined_output = f"[AUTO RECON: {ip}]\n"
     for cmd, out, err in results:
+        # Parse each result to populate target_state and show quick insights
+        parsed = parse_tool_output(cmd, out, target_state)
+        if parsed:
+            insights_panel = Panel(
+                parsed,
+                title=f"Parsed Insights: {cmd}",
+                border_style="yellow",
+                style="dim",
+            )
+            console.print(insights_panel)
+            if "nmap" in cmd.lower():
+                suggest_exploits(parsed, out)
+
         combined_output += f"\n=== {cmd} ===\n"
         # Truncate each output to 3000 chars to avoid token overflow
         output_block = out[:3000] + ("...[truncated]" if len(out) > 3000 else "")

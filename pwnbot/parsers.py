@@ -67,6 +67,54 @@ def parse_nmap_output(output: str) -> Optional[str]:
     return result.strip()
 
 
+def parse_nmap_xml(output: str, target_state: Optional[TargetState] = None) -> Optional[str]:
+    """Parse nmap XML output (from `nmap -oX -`) and extract ports/services.
+
+    Returns a summary string similar to the text parser. If `target_state` is provided,
+    discovered open ports (as integers/strings) are appended.
+    """
+    # Attempt to parse XML
+    root = ET.fromstring(output)
+
+    open_ports = []
+    services = []
+
+    # Nmap XML: iterate over host -> ports -> port
+    for host in root.findall('host'):
+        for ports in host.findall('ports'):
+            for port in ports.findall('port'):
+                state = port.find('state')
+                if state is None or state.get('state') != 'open':
+                    continue
+                portid = port.get('portid')
+                proto = port.get('protocol')
+                service = port.find('service')
+                svc_name = service.get('name') if service is not None else '?'
+                product = service.get('product') if service is not None else ''
+                version = service.get('version') if service is not None else ''
+
+                port_proto = f"{portid}/{proto}"
+                open_ports.append(port_proto)
+                svc_desc = f"{port_proto} {svc_name}"
+                if product:
+                    svc_desc += f" ({product} {version})" if version else f" ({product})"
+                services.append(svc_desc)
+
+                # Populate target_state if given
+                if target_state is not None:
+                    if portid not in target_state.ports:
+                        target_state.ports.append(portid)
+
+    if not open_ports:
+        return None
+
+    result = "[NMAP SUMMARY]\n"
+    result += f"Open ports: {', '.join(open_ports)}\n"
+    if services:
+        result += f"Services: {', '.join(services)}"
+    return result.strip()
+
+
 def parse_gobuster_output(output: str) -> Optional[str]:
     """Extract structured insights from gobuster output."""
     lines = output.split("\n")
@@ -83,12 +131,15 @@ def parse_gobuster_output(output: str) -> Optional[str]:
             
             if path_match and status_match:
                 path = path_match.group(1)
+        from typing import Optional
+        import json
+        import xml.etree.ElementTree as ET
                 status = status_match.group(1)
                 
                 if status == "200":
                     found_200.append(path)
                 elif status in ["301", "302"]:
-                    found_301_302.append(path)
+        def parse_tool_output(command: str, output: str, target_state: Optional[TargetState] = None) -> Optional[str]:
                 elif status == "403":
                     found_403.append(path)
     
@@ -103,6 +154,44 @@ def parse_gobuster_output(output: str) -> Optional[str]:
     if found_403:
         result += f"Forbidden (403): {', '.join(found_403)}"
     
+    return result.strip()
+
+
+def parse_gobuster_json(output: str, target_state: Optional[TargetState] = None) -> Optional[str]:
+    """Attempt to parse gobuster JSON/structured output. Fall back to text parser on failure."""
+    try:
+        data = json.loads(output)
+    except Exception:
+        return None
+
+    # Gobuster JSON formats may vary; try common fields
+    found_200 = []
+    found_301_302 = []
+    found_403 = []
+
+    for entry in data.get('results', []) or data.get('results', []):
+        status = str(entry.get('status') or entry.get('code') or '')
+        path = entry.get('path') or entry.get('uri') or entry.get('input')
+        if not path:
+            continue
+        if status == '200':
+            found_200.append(path)
+        elif status in ('301', '302'):
+            found_301_302.append(path)
+        elif status == '403':
+            found_403.append(path)
+
+    if not found_200 and not found_301_302 and not found_403:
+        return None
+
+    result = "[GOBUSTER SUMMARY]\n"
+    if found_200:
+        result += f"Found (200): {', '.join(found_200)}\n"
+    if found_301_302:
+        result += f"Redirects (301/302): {', '.join(found_301_302)}\n"
+    if found_403:
+        result += f"Forbidden (403): {', '.join(found_403)}"
+
     return result.strip()
 
 
@@ -134,6 +223,33 @@ def parse_ffuf_output(output: str) -> Optional[str]:
         urls = status_groups[status]
         result += f"{status}: {', '.join(urls)}\n"
     
+    return result.strip()
+
+
+def parse_ffuf_json(output: str, target_state: Optional[TargetState] = None) -> Optional[str]:
+    """Parse ffuf JSON output and return a summary."""
+    try:
+        data = json.loads(output)
+    except Exception:
+        return None
+
+    results = data.get('results') or data.get('matches')
+    if not results:
+        return None
+
+    status_groups = {}
+    for r in results:
+        status = str(r.get('status') or r.get('code') or '?')
+        url = r.get('url') or r.get('input') or r.get('position') or '?'
+        if status not in status_groups:
+            status_groups[status] = []
+        status_groups[status].append(url)
+
+    result = "[FFUF SUMMARY]\n"
+    for status in sorted(status_groups.keys()):
+        urls = status_groups[status]
+        result += f"{status}: {', '.join(urls)}\n"
+
     return result.strip()
 
 
