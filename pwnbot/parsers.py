@@ -10,6 +10,8 @@ from typing import Optional
 from rich.console import Console
 from rich.panel import Panel
 
+from .config import SEARCHSPLOIT_TIMEOUT
+
 console = Console(highlight=False)
 
 
@@ -181,7 +183,7 @@ def suggest_exploits(parsed_output: str, original_output: str) -> None:
                 shlex.split(f"searchsploit {service} {version} --no-colour"),
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=SEARCHSPLOIT_TIMEOUT,
                 shell=False
             )
             if result.stdout.strip():

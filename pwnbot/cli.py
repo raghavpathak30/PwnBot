@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 from .commands import handle_command
+from .config import DEFAULT_MODE
 from .llm import call_groq_api, fetch_available_models, init_groq_client, select_model
 from .reporting import initialize_logging, log_exchange
 from .search import extract_search_query, search_web, should_trigger_search
@@ -64,7 +65,7 @@ def main():
     target_state = TargetState()
     target_state.load()
     
-    current_mode = "htb"
+    current_mode = DEFAULT_MODE
     conversation_manager = ConversationManager(target_state, current_mode)
     
     # Initialize logging

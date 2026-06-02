@@ -1,0 +1,35 @@
+# PwnBot Configuration
+# All tunables and settings can be customized here without editing source code.
+# For secrets (GROQ_API_KEY), use environment variables only.
+
+[models]
+# Model priority list. The application will fetch live available models from Groq
+# and intersect against this list, so unavailable/deprecated models are gracefully skipped.
+# This makes the list self-healing when Groq deprecates a model.
+priority = [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+]
+
+[llm]
+# Maximum tokens in a single API response (streamed).
+max_tokens = 4096
+
+# Maximum tokens to retain in conversation history before trimming oldest pairs.
+max_history_tokens = 5000
+
+# TODO: reasoning_format - if set to "hide" or similar, strip reasoning tokens
+# from gpt-oss models before displaying in terminal. Options: "show" (default), "hide"
+# reasoning_format = "show"
+
+[subprocess]
+# Command execution timeouts (seconds)
+run_timeout = 120        # /run <command>
+recon_timeout = 180      # Auto nmap recon
+searchsploit_timeout = 10  # Exploit suggestion lookup
+
+[defaults]
+# Default engagement mode at startup
+mode = "htb"

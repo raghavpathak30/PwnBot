@@ -12,7 +12,7 @@ from groq import Groq, RateLimitError
 from rich.console import Console
 from rich.rule import Rule
 
-from .config import MODEL_PRIORITY
+from .config import MODEL_PRIORITY, MAX_TOKENS
 from .state import ConversationManager
 
 console = Console(highlight=False)
@@ -113,7 +113,7 @@ def call_groq_api(
             response = groq_client.chat.completions.create(
                 model=model_to_use,
                 messages=messages_with_system,
-                max_tokens=4096,
+                max_tokens=MAX_TOKENS,
                 stream=True,
             )
             

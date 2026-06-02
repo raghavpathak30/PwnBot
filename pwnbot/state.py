@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from rich.console import Console
 
-from .config import BASE_PROMPT, MODE_REMINDERS
+from .config import BASE_PROMPT, MODE_REMINDERS, MAX_HISTORY_TOKENS
 
 console = Console(highlight=False)
 
@@ -65,12 +65,11 @@ class TargetState:
 class ConversationManager:
     """Manages conversation history, token estimation, and system prompt building."""
     
-    MAX_TOKENS = 5000
-    
     def __init__(self, target_state: TargetState, current_mode: str = "htb"):
         self.history: List[Dict[str, str]] = []
         self.target_state = target_state
         self.current_mode = current_mode
+        self.max_tokens = MAX_HISTORY_TOKENS
     
     def add_message(self, role: str, content: str) -> None:
         """Add a message to conversation history."""
@@ -84,12 +83,12 @@ class ConversationManager:
         """Trim conversation history if it exceeds token limit."""
         current_tokens = self.estimate_tokens()
         
-        if current_tokens > self.MAX_TOKENS:
+        if current_tokens > self.max_tokens:
             console.print(
                 "[dim]Trimming old context to stay within token limit...[/dim]"
             )
             # Keep the first message, remove oldest user+assistant pairs
-            while current_tokens > self.MAX_TOKENS and len(self.history) > 2:
+            while current_tokens > self.max_tokens and len(self.history) > 2:
                 if (self.history[0]["role"] == "user" and 
                         len(self.history) > 1 and
                         self.history[1]["role"] == "assistant"):

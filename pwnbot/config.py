@@ -1,6 +1,20 @@
 """
 Configuration constants and settings for PwnBot.
+Loads tunables from config.toml with sensible defaults.
+Secrets (GROQ_API_KEY) come from environment variables only.
 """
+
+import sys
+from pathlib import Path
+
+# Try to import tomllib (Python 3.11+), fall back to tomli for older versions
+try:
+    import tomllib
+except ImportError:
+    try:
+        import tomli as tomllib
+    except ImportError:
+        tomllib = None
 
 BASE_PROMPT = """You are PWNBOT — an elite penetration tester and bug bounty hunter. You think like an attacker, reason like a defender, and communicate like a senior red teamer writing a report.
 
@@ -50,9 +64,75 @@ MODE_REMINDERS = {
     "recon": "[MODE: Recon] Focus on enumeration, asset discovery, and attack surface mapping before any exploitation.",
 }
 
-MODEL_PRIORITY = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-70b-versatile",
-    "llama3-70b-8192",
-    "llama-3.1-8b-instant",
-]
+# ============================================================================
+# Load configuration from config.toml with sensible defaults
+# ============================================================================
+
+# Default values (used if config.toml is missing or incomplete)
+_DEFAULTS = {
+    "models": {
+        "priority": [
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+        ],
+    },
+    "llm": {
+        "max_tokens": 4096,
+        "max_history_tokens": 5000,
+    },
+    "subprocess": {
+        "run_timeout": 120,
+        "recon_timeout": 180,
+        "searchsploit_timeout": 10,
+    },
+    "defaults": {
+        "mode": "htb",
+    },
+}
+
+
+def _load_config():
+    """Load config.toml from project root with fallbacks to defaults."""
+    config = {}
+    
+    # Look for config.toml in the project root (parent of pwnbot/ package)
+    config_path = Path(__file__).parent.parent / "config.toml"
+    
+    if config_path.exists() and tomllib:
+        try:
+            with open(config_path, "rb") as f:
+                loaded = tomllib.load(f)
+                # Deep merge: loaded config overrides defaults
+                for key in _DEFAULTS:
+                    if key in loaded:
+                        if isinstance(_DEFAULTS[key], dict):
+                            config[key] = {**_DEFAULTS[key], **loaded.get(key, {})}
+                        else:
+                            config[key] = loaded[key]
+                    else:
+                        config[key] = _DEFAULTS[key]
+                return config
+        except Exception as e:
+            print(f"Warning: Failed to load config.toml: {e}. Using defaults.", file=sys.stderr)
+    elif config_path.exists() and not tomllib:
+        print(
+            "Warning: config.toml exists but tomllib/tomli not available. "
+            "Install 'tomli' for Python <3.11: pip install tomli",
+            file=sys.stderr,
+        )
+    
+    return _DEFAULTS
+
+
+_config = _load_config()
+
+# Export config as module-level constants for easy access
+MODEL_PRIORITY = _config["models"]["priority"]
+MAX_TOKENS = _config["llm"]["max_tokens"]
+MAX_HISTORY_TOKENS = _config["llm"]["max_history_tokens"]
+RUN_TIMEOUT = _config["subprocess"]["run_timeout"]
+RECON_TIMEOUT = _config["subprocess"]["recon_timeout"]
+SEARCHSPLOIT_TIMEOUT = _config["subprocess"]["searchsploit_timeout"]
+DEFAULT_MODE = _config["defaults"]["mode"]

@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
+from .config import RUN_TIMEOUT, RECON_TIMEOUT
 from .llm import call_groq_api
 from .parsers import parse_tool_output, suggest_exploits
 from .reporting import log_exchange
@@ -63,13 +64,13 @@ def handle_run(
             text=True
         ) as proc:
             try:
-                stdout, stderr = proc.communicate(timeout=120)
+                stdout, stderr = proc.communicate(timeout=RUN_TIMEOUT)
                 stdout = stdout.strip()
                 stderr = stderr.strip()
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.communicate()
-                console.print("[bold red]Command timed out after 120 seconds. Process killed.[/bold red]")
+                console.print(f"[bold red]Command timed out after {RUN_TIMEOUT} seconds. Process killed.[/bold red]")
                 return active_model, available_models
         
         if not stdout and not stderr:
@@ -206,12 +207,12 @@ def run_auto_recon(
                 text=True
             ) as proc:
                 try:
-                    stdout, stderr = proc.communicate(timeout=180)
+                    stdout, stderr = proc.communicate(timeout=RECON_TIMEOUT)
                     results.append((nmap_cmd, stdout.strip(), stderr.strip()))
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.communicate()
-                    results.append((nmap_cmd, "", "[TIMEOUT after 180 seconds]"))
+                    results.append((nmap_cmd, "", f"[TIMEOUT after {RECON_TIMEOUT} seconds]"))
         except Exception as e:
             results.append((nmap_cmd, "", f"[ERROR: {e}]"))
     
