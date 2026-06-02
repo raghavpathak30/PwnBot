@@ -13,11 +13,17 @@ from .state import TargetState
 console = Console(highlight=False)
 
 
-def initialize_logging() -> Optional[Path]:
-    """Initialize session logging and return path to log file."""
+def initialize_logging(workspace_dir: Optional[Path] = None) -> Optional[Path]:
+    """Initialize session logging and return path to log file.
+
+    If `workspace_dir` is provided, create logs under that workspace; otherwise use CWD/logs.
+    """
     try:
-        log_dir = Path("logs")
-        log_dir.mkdir(exist_ok=True)
+        if workspace_dir:
+            log_dir = workspace_dir / "logs"
+        else:
+            log_dir = Path("logs")
+        log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         session_log_path = log_dir / f"session_{timestamp}.md"
         return session_log_path
@@ -50,8 +56,11 @@ def generate_report(
 ) -> None:
     """Generate and save markdown report from target state."""
     try:
-        reports_dir = Path("reports")
-        reports_dir.mkdir(exist_ok=True)
+        if target_state.workspace_dir:
+            reports_dir = target_state.workspace_dir / "reports"
+        else:
+            reports_dir = Path("reports")
+        reports_dir.mkdir(parents=True, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         ip_str = target_state.ip or "unknown"

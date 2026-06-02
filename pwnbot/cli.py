@@ -68,8 +68,8 @@ def main():
     current_mode = DEFAULT_MODE
     conversation_manager = ConversationManager(target_state, current_mode)
     
-    # Initialize logging
-    session_log_path = initialize_logging()
+    # Initialize logging (use workspace if already set)
+    session_log_path = initialize_logging(target_state.workspace_dir)
     
     # Setup readline history
     history_file = os.path.expanduser("~/.pwnbot_history")
@@ -102,7 +102,7 @@ def main():
             
             # Check for commands
             if user_input.startswith("/"):
-                was_command, active_model, available_models = handle_command(
+                was_command, active_model, available_models, session_log_path = handle_command(
                     user_input,
                     target_state,
                     conversation_manager,

@@ -4,13 +4,30 @@ State management classes for PwnBot.
 
 import json
 from pathlib import Path
+import json
+import re
+import shutil
 from typing import Any, Dict, List, Optional
+
+from pathlib import Path
 
 from rich.console import Console
 
 from .config import BASE_PROMPT, MODE_REMINDERS, MAX_HISTORY_TOKENS
 
 console = Console(highlight=False)
+
+
+def _engagements_root() -> Path:
+    root = Path.home() / ".pwnbot" / "engagements"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _sanitize_target(value: str) -> str:
+    # Keep alphanumerics, dot, dash, underscore; replace others with underscore
+    v = value.strip().lower()
+    return re.sub(r"[^a-z0-9_.-]", "_", v)
 
 
 class TargetState:
@@ -22,34 +39,113 @@ class TargetState:
         self.ports: List[str] = []
         self.notes: List[str] = []
         self.creds: List[str] = []
+        self.workspace_dir: Optional[Path] = None
     
     def load(self) -> None:
         """Load target_state from session_target.json if it exists."""
         try:
-            if Path("session_target.json").exists():
-                with open("session_target.json", "r") as f:
+            cwd_session = Path("session_target.json")
+            if cwd_session.exists():
+                console.print("[dim]Found legacy session_target.json in current directory.[/dim]")
+                resp = input("Import into workspace under ~/.pwnbot/engagements/? (y/n) ").strip().lower()
+                with open(cwd_session, "r") as f:
                     loaded = json.load(f)
-                    self.ip = loaded.get("ip")
-                    self.domain = loaded.get("domain")
-                    self.ports = loaded.get("ports", [])
-                    self.notes = loaded.get("notes", [])
-                    self.creds = loaded.get("creds", [])
+                self.ip = loaded.get("ip")
+                self.domain = loaded.get("domain")
+                self.ports = loaded.get("ports", [])
+                self.notes = loaded.get("notes", [])
+                self.creds = loaded.get("creds", [])
+
+                if resp in ("y", "yes"):
+                    # Create workspace and migrate files
+                    self._ensure_workspace()
+                    try:
+                        # move session_target.json
+                        shutil.move(str(cwd_session), str(self.workspace_dir / "target.json"))
+                        # move logs/ if exists
+                        if Path("logs").exists():
+                            shutil.move("logs", str(self.workspace_dir / "logs"))
+                        if Path("reports").exists():
+                            shutil.move("reports", str(self.workspace_dir / "reports"))
+                        console.print(f"[green]Imported legacy session into {self.workspace_dir}[/green]")
+                    except Exception as e:
+                        console.print(f"[yellow]Warning: failed to migrate files: {e}[/yellow]")
+                else:
+                    console.print("[dim]Continuing with legacy session_target.json in CWD.[/dim]")
+                    # keep values loaded but do not create workspace
+            else:
+                # attempt to find any existing engagements and load a default?
+                pass
         except Exception as e:
             console.print(f"[dim yellow]Warning: Failed to load session_target.json: {e}[/dim yellow]")
     
     def save(self) -> None:
         """Save target_state to session_target.json."""
         try:
-            with open("session_target.json", "w") as f:
-                json.dump({
-                    "ip": self.ip,
-                    "domain": self.domain,
-                    "ports": self.ports,
-                    "notes": self.notes,
-                    "creds": self.creds,
-                }, f, indent=2)
+            data = {
+                "ip": self.ip,
+                "domain": self.domain,
+                "ports": self.ports,
+                "notes": self.notes,
+                "creds": self.creds,
+            }
+            if self.workspace_dir:
+                self.workspace_dir.mkdir(parents=True, exist_ok=True)
+                target_file = self.workspace_dir / "target.json"
+                with open(target_file, "w") as f:
+                    json.dump(data, f, indent=2)
+            else:
+                with open("session_target.json", "w") as f:
+                    json.dump(data, f, indent=2)
         except Exception as e:
-            console.print(f"[yellow]Warning: Failed to save session_target.json: {e}[/yellow]")
+            console.print(f"[yellow]Warning: Failed to save target state: {e}[/yellow]")
+
+    def _ensure_workspace(self) -> None:
+        """Create and set workspace dir based on current target (ip or domain)."""
+        identifier = self.ip or self.domain
+        if not identifier:
+            return
+        name = _sanitize_target(identifier)
+        root = _engagements_root()
+        ws = root / name
+        ws.mkdir(parents=True, exist_ok=True)
+        # ensure logs and reports dirs exist
+        (ws / "logs").mkdir(exist_ok=True)
+        (ws / "reports").mkdir(exist_ok=True)
+        self.workspace_dir = ws
+
+    def ensure_workspace_for_set(self) -> Optional[Path]:
+        """Ensure workspace exists and return path to new session log (if created)."""
+        if not (self.ip or self.domain):
+            return None
+        if not self.workspace_dir:
+            self._ensure_workspace()
+        return self.workspace_dir
+
+    def list_engagements(self) -> List[Path]:
+        root = _engagements_root()
+        return [p for p in root.iterdir() if p.is_dir()]
+
+    def select_engagement(self, name: str) -> bool:
+        root = _engagements_root()
+        candidate = root / name
+        if not candidate.exists():
+            return False
+        # load target.json if present
+        target_file = candidate / "target.json"
+        try:
+            if target_file.exists():
+                with open(target_file, "r") as f:
+                    loaded = json.load(f)
+                self.ip = loaded.get("ip")
+                self.domain = loaded.get("domain")
+                self.ports = loaded.get("ports", [])
+                self.notes = loaded.get("notes", [])
+                self.creds = loaded.get("creds", [])
+            self.workspace_dir = candidate
+            return True
+        except Exception:
+            return False
     
     def to_dict(self) -> Dict[str, Any]:
         """Return state as dictionary for serialization."""

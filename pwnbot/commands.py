@@ -13,7 +13,7 @@ from rich.table import Table
 from .config import MODE_REMINDERS, MODEL_PRIORITY
 from .llm import call_groq_api
 from .recon import handle_run, handle_shell, run_auto_recon
-from .reporting import generate_report, log_exchange
+from .reporting import generate_report, log_exchange, initialize_logging
 from .state import ConversationManager, TargetState
 
 console = Console(highlight=False)
@@ -87,7 +87,7 @@ def handle_command(
     active_model: str,
     available_models: list,
     session_log_path: Optional[Path],
-) -> Tuple[bool, str, list]:
+) -> Tuple[bool, str, list, Optional[Path]]:
     """
     Handle slash commands. 
     
@@ -96,10 +96,38 @@ def handle_command(
     """
     parts = command.split(maxsplit=2)
     cmd = parts[0].lower()
+    # /workspace command: show current workspace, list or select engagements
+    if cmd == "/workspace":
+        if len(parts) == 1:
+            if target_state.workspace_dir:
+                console.print(f"Current workspace: [green]{target_state.workspace_dir}[/green]")
+            else:
+                console.print("Current workspace: [dim]none (using CWD)[/dim]")
+            console.print("Use '/workspace list' to see engagements or '/workspace select <name>' to switch.")
+            return True, active_model, available_models, session_log_path
+        sub = parts[1].lower()
+        if sub == "list":
+            engagements = target_state.list_engagements()
+            table = Table(title="Engagements", show_header=True)
+            table.add_column("Name", style="cyan")
+            table.add_column("Path", style="white")
+            for e in engagements:
+                table.add_row(e.name, str(e))
+            console.print(table)
+            return True, active_model, available_models, session_log_path
+        if sub == "select" and len(parts) >= 3:
+            name = parts[2]
+            ok = target_state.select_engagement(name)
+            if ok:
+                session_log_path = initialize_logging(target_state.workspace_dir)
+                console.print(f"[green]Selected workspace {name}[/green]")
+            else:
+                console.print(f"[yellow]No engagement named {name}[/yellow]")
+            return True, active_model, available_models, session_log_path
     
     if cmd == "/clear":
         conversation_manager.clear()
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/help":
         table = Table(title="Help", show_header=True, header_style="bold")
@@ -137,7 +165,7 @@ def handle_command(
         table.add_row("/model set <model_id>", "Switch to a specific model")
         
         console.print(table)
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/exit" or cmd == "/quit":
         target_state.save()
@@ -148,7 +176,7 @@ def handle_command(
     elif cmd == "/history":
         user_turns = len([m for m in conversation_manager.history if m["role"] == "user"])
         console.print(f"User turns in history: {user_turns}")
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/target":
         table = Table(title="Target State", show_header=True, header_style="bold")
@@ -171,11 +199,11 @@ def handle_command(
         table.add_row("Notes", style_target_value(notes_value))
         
         console.print(table)
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/set" and len(parts) < 3:
         console.print("[bold red]Usage: /set <ip|domain|port|creds> <value>[/bold red]")
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/set" and len(parts) >= 3:
         subcommand = parts[1].lower()
@@ -184,6 +212,10 @@ def handle_command(
         if subcommand == "ip":
             target_state.ip = value
             console.print(f"[green]IP set to: {value}[/green]")
+            # create/select workspace for this target
+            ws = target_state.ensure_workspace_for_set()
+            if ws:
+                session_log_path = initialize_logging(ws)
             target_state.save()
             # Ask for auto recon
             recon_choice = Prompt.ask(
@@ -203,6 +235,9 @@ def handle_command(
         elif subcommand == "domain":
             target_state.domain = value
             console.print(f"[green]Domain set to: {value}[/green]")
+            ws = target_state.ensure_workspace_for_set()
+            if ws:
+                session_log_path = initialize_logging(ws)
             target_state.save()
         elif subcommand == "port":
             port = value
@@ -215,7 +250,7 @@ def handle_command(
                 target_state.creds.append(value)
                 console.print(f"[green]Credentials added: {value}[/green]")
                 target_state.save()
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/note" and len(parts) >= 2:
         note_text = " ".join(parts[1:])
@@ -223,12 +258,12 @@ def handle_command(
         target_state.notes.append(f"[{timestamp}] {note_text}")
         console.print(f"[green]Note added[/green]")
         target_state.save()
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/save":
         target_state.save()
         console.print("[green]Target state saved[/green]")
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/mode" and len(parts) >= 2:
         mode = parts[1].lower()
@@ -237,7 +272,7 @@ def handle_command(
             console.print(f"[green]Mode switched to: {mode}[/green]")
         else:
             console.print(f"[bold red]Invalid mode. Use: htb, bugbounty, or recon[/bold red]")
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/model":
         if len(parts) == 1:
@@ -260,7 +295,7 @@ def handle_command(
                 )
                 for model in available_models:
                     console.print(f"  - {model}")
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/paste":
         active_model, available_models = handle_paste(
@@ -271,7 +306,7 @@ def handle_command(
             available_models,
             session_log_path,
         )
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/run":
         command = " ".join(parts[1:]) if len(parts) > 1 else ""
@@ -284,12 +319,12 @@ def handle_command(
             available_models,
             session_log_path,
         )
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/shell":
         command = " ".join(parts[1:]) if len(parts) > 1 else ""
         handle_shell(command)
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/recon":
         if target_state.ip:
@@ -304,10 +339,10 @@ def handle_command(
             )
         else:
             console.print("[yellow]No target IP set. Use /set ip <value> first.[/yellow]")
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
     elif cmd == "/report":
         generate_report(target_state, session_log_path)
-        return True, active_model, available_models
+        return True, active_model, available_models, session_log_path
     
-    return False, active_model, available_models
+    return False, active_model, available_models, session_log_path
