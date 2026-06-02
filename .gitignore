@@ -1,7 +1,6 @@
-session_target.json
-logs/
+.env
 __pycache__/
 *.pyc
-.env
-*.key
+logs/
 reports/
+session_target.json

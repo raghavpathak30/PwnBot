@@ -164,7 +164,26 @@ def handle_shell(command: str) -> None:
     console.print(f"[dim yellow]Launching interactive shell: {command}[/dim yellow]")
     console.print("[dim]Press Ctrl+C to return to PWNBOT[/dim]")
     try:
-        os.system(command)
+        # Prefer a safe subprocess call for simple commands (no shell metacharacters).
+        # For interactive PTY-style programs (nc, pwncat, telnet, or when shell features
+        # like pipes/redirects are required), we intentionally use `os.system` to
+        # allow the user's terminal session to act as a real shell/PTY. This is
+        # deliberate — interactive programs need a controlling TTY which
+        # subprocess with pipes cannot provide.
+        shell_chars = set("|&;<>*?()$`\\\"'\n")
+        needs_shell = any(c in command for c in shell_chars)
+        # Common interactive program heuristics
+        interactive_cmds = ["nc", "ncat", "pwncat", "pwncat-cs", "telnet", "bash", "sh", "python3 -c"]
+        if any(command.strip().startswith(ic) for ic in interactive_cmds):
+            needs_shell = True
+
+        if needs_shell:
+            # Intentional: use os.system for interactive/PTTY-needed commands.
+            os.system(command)
+        else:
+            # Safe, non-interactive invocation using shlex.split and subprocess.call
+            args = shlex.split(command)
+            subprocess.call(args, shell=False)
     except KeyboardInterrupt:
         pass
     console.print("[dim yellow]Returned to PWNBOT[/dim yellow]")

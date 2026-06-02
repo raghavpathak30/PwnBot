@@ -183,15 +183,47 @@ class ConversationManager:
             console.print(
                 "[dim]Trimming old context to stay within token limit...[/dim]"
             )
-            # Keep the first message, remove oldest user+assistant pairs
-            while current_tokens > self.max_tokens and len(self.history) > 2:
-                if (self.history[0]["role"] == "user" and 
-                        len(self.history) > 1 and
-                        self.history[1]["role"] == "assistant"):
-                    self.history.pop(0)
-                    self.history.pop(0)
+            # Protect any system messages and the current target block from removal.
+            # Only remove older user/assistant turns that do not contain the
+            # '[CURRENT TARGET]' marker. This ensures the system prompt (when
+            # represented as a system message) and the running target context
+            # remain available to the LLM.
+            def is_protected(msg: Dict[str, str]) -> bool:
+                if msg.get("role") == "system":
+                    return True
+                content = msg.get("content", "")
+                if "[CURRENT TARGET]" in content:
+                    return True
+                return False
+
+            # Remove oldest unprotected messages until under token limit.
+            while current_tokens > self.max_tokens:
+                # find earliest removable index
+                removable_index = None
+                for idx, m in enumerate(self.history):
+                    if not is_protected(m):
+                        removable_index = idx
+                        break
+                # if nothing removable, stop to avoid dropping protected context
+                if removable_index is None:
+                    console.print("[dim yellow]Cannot trim further without losing protected context.[/dim yellow]")
+                    break
+
+                # Prefer removing a user+assistant pair when possible
+                # If removable_index points to a user and next is assistant and also removable, drop both.
+                if (
+                    self.history[removable_index].get("role") == "user"
+                    and removable_index + 1 < len(self.history)
+                    and not is_protected(self.history[removable_index + 1])
+                    and self.history[removable_index + 1].get("role") == "assistant"
+                ):
+                    # pop twice
+                    self.history.pop(removable_index)
+                    self.history.pop(removable_index)
                 else:
-                    self.history.pop(0)
+                    # just pop the single removable message
+                    self.history.pop(removable_index)
+
                 current_tokens = self.estimate_tokens()
     
     def build_target_block(self) -> str:
